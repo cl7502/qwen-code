@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import os from 'node:os';
 import { HookEventName } from './types.js';
 import type {
   HookConfig,
@@ -266,6 +267,7 @@ export class HookRunner {
         ...hookConfig.env,
       };
 
+      const isWindows = os.platform() === 'win32';
       const child = spawn(
         shellConfig.executable,
         [...shellConfig.argsPrefix, command],
@@ -274,19 +276,36 @@ export class HookRunner {
           cwd: input.cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,
+          windowsHide: isWindows,
         },
       );
 
       // Helper to kill child process
       const killChild = () => {
         if (!child.killed) {
-          child.kill('SIGTERM');
-          // Force kill after 2 seconds
-          setTimeout(() => {
-            if (!child.killed) {
-              child.kill('SIGKILL');
+          if (isWindows && child.pid) {
+            // On Windows, use taskkill to forcefully terminate the process tree
+            try {
+              spawnSync(
+                'taskkill',
+                ['/F', '/T', '/PID', child.pid.toString()],
+                {
+                  stdio: 'ignore',
+                },
+              );
+            } catch {
+              // Fallback to normal kill if taskkill fails
+              child.kill();
             }
-          }, 2000);
+          } else {
+            // On Unix, use SIGTERM then SIGKILL
+            child.kill('SIGTERM');
+            setTimeout(() => {
+              if (!child.killed) {
+                child.kill('SIGKILL');
+              }
+            }, 2000);
+          }
         }
       };
 

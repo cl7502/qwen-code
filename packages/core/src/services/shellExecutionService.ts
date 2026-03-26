@@ -6,6 +6,7 @@
 
 import stripAnsi from 'strip-ansi';
 import type { PtyImplementation } from '../utils/getPty.js';
+import { createDebugLogger } from '../utils/debugLogger.js';
 import { getPty } from '../utils/getPty.js';
 import { spawn as cpSpawn, spawnSync } from 'node:child_process';
 import { TextDecoder } from 'node:util';
@@ -23,6 +24,7 @@ const { Terminal } = pkg;
 
 const SIGKILL_TIMEOUT_MS = 200;
 const WINDOWS_PATH_DELIMITER = ';';
+const debugLogger = createDebugLogger('SHELL_EXECUTION');
 let cachedWindowsPathFingerprint: string | undefined;
 let cachedMergedWindowsPath: string | undefined;
 
@@ -228,13 +230,21 @@ const windowsStrategy: ProcessCleanupStrategy = {
   killChildProcesses: (pids) => {
     if (pids.size > 0) {
       try {
-        const args = ['/f', '/t'];
+        const args = ['/F', '/T'];
         for (const pid of pids) {
-          args.push('/pid', pid.toString());
+          args.push('/PID', pid.toString());
         }
-        spawnSync('taskkill', args);
-      } catch {
-        // ignore
+        const result = spawnSync('taskkill', args, {
+          stdio: 'ignore',
+          timeout: 5000,
+        });
+        if (result.status !== 0) {
+          debugLogger.warn(
+            `taskkill failed with status ${result.status}: ${result.stderr?.toString()}`,
+          );
+        }
+      } catch (e) {
+        debugLogger.warn(`Failed to kill child processes: ${e}`);
       }
     }
   },
@@ -457,7 +467,19 @@ export class ShellExecutionService {
         const abortHandler = async () => {
           if (child.pid && !exited) {
             if (isWindows) {
-              cpSpawn('taskkill', ['/pid', child.pid.toString(), '/f', '/t']);
+              // On Windows, use taskkill to forcefully terminate the process tree
+              try {
+                spawnSync(
+                  'taskkill',
+                  ['/F', '/T', '/PID', child.pid.toString()],
+                  {
+                    stdio: 'ignore',
+                    timeout: 5000,
+                  },
+                );
+              } catch (e) {
+                debugLogger.warn(`Failed to kill process ${child.pid}: ${e}`);
+              }
             } else {
               try {
                 process.kill(-child.pid, 'SIGTERM');

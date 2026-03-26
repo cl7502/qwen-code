@@ -11,6 +11,7 @@ import { InputPrompt } from './InputPrompt.js';
 import { Footer } from './Footer.js';
 import { QueuedMessageDisplay } from './QueuedMessageDisplay.js';
 import { KeyboardShortcuts } from './KeyboardShortcuts.js';
+import { WorkingDirectoryDisplay } from './WorkingDirectoryDisplay.js';
 import { useUIState } from '../contexts/UIStateContext.js';
 import { useUIActions } from '../contexts/UIActionsContext.js';
 import { useVimMode } from '../contexts/VimModeContext.js';
@@ -122,6 +123,11 @@ export const Composer = () => {
         ) : (
           !isScreenReaderEnabled && <Footer />
         ))}
+
+      {/* Working Directory Display - always shown when input is active */}
+      {uiState.isInputActive && !showSuggestions && (
+        <WorkingDirectoryDisplay cwd={config.getTargetDir()} />
+      )}
     </Box>
   );
 };
