@@ -1,6 +1,6 @@
 {
   "name": "@qwen-code/qwen-code",
-  "version": "0.13.x1",
+  "version": "0.13.1",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -68,7 +68,7 @@
     "baseline-browser-mapping": "^2.9.19"
   },
   "bin": {
-    "qwen": "dist/cli.js"
+    "qwen2": "dist/cli.js"
   },
   "files": [
     "dist/",

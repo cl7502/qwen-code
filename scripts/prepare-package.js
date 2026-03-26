@@ -148,7 +148,7 @@ const distPackageJson = {
   type: 'module',
   main: 'cli.js',
   bin: {
-    qwen: 'cli.js',
+    qwen2: 'cli.js',
   },
   files: [
     'cli.js',

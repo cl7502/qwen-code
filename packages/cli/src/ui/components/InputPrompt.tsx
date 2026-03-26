@@ -1075,6 +1075,7 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
       color={statusColor ?? theme.text.accent}
       aria-label={statusText || undefined}
     >
+      <Text color={theme.status.success}>😀</Text>{' '}
       {shellModeActive ? (
         reverseSearchActive ? (
           <Text color={theme.text.link} aria-label={SCREEN_READER_USER_PREFIX}>
