@@ -553,12 +553,9 @@ describe('EditTool', () => {
       };
       const invocation = tool.build(params);
       const result = await invocation.execute(new AbortController().signal);
-      expect(result.llmContent).toMatch(
-        /0 occurrences found for old_string in/,
-      );
-      expect(result.returnDisplay).toMatch(
-        /Failed to edit, could not find the string to replace./,
-      );
+      // Updated: New diagnostic message format
+      expect(result.llmContent).toMatch(/old_string not found in/);
+      expect(result.returnDisplay).toMatch(/未找到匹配内容/);
     });
 
     it('should return error if multiple occurrences of old_string are found and replace_all is false', async () => {
@@ -696,9 +693,8 @@ describe('EditTool', () => {
       const result = await invocation.execute(new AbortController().signal);
 
       expect(result.error?.type).toBe(ToolErrorType.EDIT_NO_OCCURRENCE_FOUND);
-      expect(result.returnDisplay).toMatch(
-        /Failed to edit, could not find the string to replace./,
-      );
+      // Updated: New diagnostic message format
+      expect(result.returnDisplay).toMatch(/未找到匹配内容/);
       // Ensure the file was not actually changed
       expect(fs.readFileSync(filePath, 'utf8')).toBe(initialContent);
     });

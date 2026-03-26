@@ -11,6 +11,11 @@
  * literal substring matches, then gradually relax comparison rules (smart
  * quotes, em-dashes, trailing whitespace, etc.) until we either locate the
  * exact slice from the file or conclude the edit cannot be applied.
+ *
+ * Enhanced with fallback strategies for better compatibility:
+ * - Line ending normalization (CRLF/LF)
+ * - Quote character normalization (smart/straight quotes)
+ * - Extended comparison passes for whitespace handling
  */
 
 /* -------------------------------------------------------------------------- */
@@ -77,14 +82,102 @@ interface MatchedSliceResult {
  * Comparison passes become progressively more forgiving, making it possible to
  * match when only trailing whitespace differs. Leading whitespace (indentation)
  * is always preserved to avoid matching at incorrect scope levels.
+ *
+ * Extended with additional passes for better compatibility:
+ * - Pass 0: Exact match (original)
+ * - Pass 1: Trim trailing whitespace
+ * - Pass 2: Normalize all whitespace (tabs to spaces)
+ * - Pass 3: Trim both ends
  */
 const LINE_COMPARISON_PASSES: Array<(value: string) => string> = [
   (value) => value,
   (value) => value.trimEnd(),
+  // Enhanced: Normalize tabs to 4 spaces for comparison
+  (value) => value.replace(/\t/g, '    ').trimEnd(),
+  // Enhanced: Trim both ends for more forgiving match
+  (value) => value.trim().replace(/\t/g, '    '),
 ];
 
 function normalizeLineForComparison(value: string): string {
   return normalizeBasicCharacters(value).trimEnd();
+}
+
+/**
+ * Generates line ending variants for a given string.
+ * This helps match content when the file uses different line endings.
+ */
+function generateLineEndingVariants(str: string): string[] {
+  const variants: string[] = [str];
+
+  // If string contains \n but not \r\n, try adding \r
+  if (str.includes('\n') && !str.includes('\r\n')) {
+    variants.push(str.replace(/\n/g, '\r\n'));
+  }
+
+  // If string contains \r\n, try removing \r
+  if (str.includes('\r\n')) {
+    variants.push(str.replace(/\r\n/g, '\n'));
+  }
+
+  return variants;
+}
+
+/**
+ * Generates quote character variants for a given string.
+ * This helps match content when smart quotes and straight quotes are mixed.
+ */
+function generateQuoteVariants(str: string): string[] {
+  const variants: string[] = [str];
+
+  // Smart single quotes to straight
+  const smartSingleToStraight = str.replace(/['']/g, "'");
+  if (smartSingleToStraight !== str) {
+    variants.push(smartSingleToStraight);
+  }
+
+  // Smart double quotes to straight
+  const smartDoubleToStraight = str.replace(/[""]/g, '"');
+  if (smartDoubleToStraight !== str) {
+    variants.push(smartDoubleToStraight);
+  }
+
+  // All smart quotes to straight
+  const allStraight = str.replace(/[''"""]/g, (match) => {
+    const map: Record<string, string> = {
+      '\u2018': "'", // Left single quote
+      '\u2019': "'", // Right single quote
+      '\u201C': '"', // Left double quote
+      '\u201D': '"', // Right double quote
+    };
+    return map[match] || match;
+  });
+  if (allStraight !== str) {
+    variants.push(allStraight);
+  }
+
+  return variants;
+}
+
+/**
+ * Generates common typographic variants for a string.
+ * Includes dashes, ellipsis, and other common substitutions.
+ */
+function generateTypographicVariants(str: string): string[] {
+  const variants: string[] = [str];
+
+  // Em-dash / en-dash to double hyphen
+  const dashVariant = str.replace(/[—–]/g, '--');
+  if (dashVariant !== str) {
+    variants.push(dashVariant);
+  }
+
+  // Ellipsis to three dots
+  const ellipsisVariant = str.replace(/…/g, '...');
+  if (ellipsisVariant !== str) {
+    variants.push(ellipsisVariant);
+  }
+
+  return variants;
 }
 
 /**
@@ -246,6 +339,7 @@ function findMatchedSlice(
     return null;
   }
 
+  // Pass 1: Try literal match
   const literalIndex = haystack.indexOf(needle);
   if (literalIndex !== -1) {
     return {
@@ -254,6 +348,7 @@ function findMatchedSlice(
     };
   }
 
+  // Pass 2: Try character normalization (smart quotes, etc.)
   const normalizedHaystack = normalizeBasicCharacters(haystack);
   const normalizedNeedleChars = normalizeBasicCharacters(needle);
   const normalizedIndex = normalizedHaystack.indexOf(normalizedNeedleChars);
@@ -264,6 +359,62 @@ function findMatchedSlice(
     };
   }
 
+  // Pass 3: Try line ending variants (CRLF vs LF)
+  const lineEndingVariants = generateLineEndingVariants(needle);
+  for (const variant of lineEndingVariants) {
+    if (variant !== needle) {
+      const variantIndex = haystack.indexOf(variant);
+      if (variantIndex !== -1) {
+        return {
+          slice: haystack.slice(variantIndex, variantIndex + variant.length),
+          removedTrailingFinalEmptyLine: false,
+        };
+      }
+      // Also try with character normalization
+      const normalizedVariantIndex = normalizedHaystack.indexOf(
+        normalizeBasicCharacters(variant),
+      );
+      if (normalizedVariantIndex !== -1) {
+        return {
+          slice: haystack.slice(
+            normalizedVariantIndex,
+            normalizedVariantIndex + variant.length,
+          ),
+          removedTrailingFinalEmptyLine: false,
+        };
+      }
+    }
+  }
+
+  // Pass 4: Try quote variants
+  const quoteVariants = generateQuoteVariants(needle);
+  for (const variant of quoteVariants) {
+    if (variant !== needle) {
+      const variantIndex = haystack.indexOf(variant);
+      if (variantIndex !== -1) {
+        return {
+          slice: haystack.slice(variantIndex, variantIndex + variant.length),
+          removedTrailingFinalEmptyLine: false,
+        };
+      }
+    }
+  }
+
+  // Pass 5: Try typographic variants (dashes, ellipsis, etc.)
+  const typoVariants = generateTypographicVariants(needle);
+  for (const variant of typoVariants) {
+    if (variant !== needle) {
+      const variantIndex = haystack.indexOf(variant);
+      if (variantIndex !== -1) {
+        return {
+          slice: haystack.slice(variantIndex, variantIndex + variant.length),
+          removedTrailingFinalEmptyLine: false,
+        };
+      }
+    }
+  }
+
+  // Pass 6: Line-based matching (most forgiving)
   return findLineBasedMatch(haystack, needle);
 }
 

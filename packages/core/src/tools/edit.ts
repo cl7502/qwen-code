@@ -204,9 +204,15 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
           type: ToolErrorType.ATTEMPT_TO_CREATE_EXISTING_FILE,
         };
       } else if (occurrences === 0) {
+        // Enhanced: Provide diagnostic information to help identify the issue
+        const diagnosticInfo = diagnoseEditFailure(
+          currentContent,
+          finalOldString,
+          params.file_path,
+        );
         error = {
-          display: `Failed to edit, could not find the string to replace.`,
-          raw: `Failed to edit, 0 occurrences found for old_string in ${params.file_path}. No edits made. The exact text in old_string was not found. Ensure you're not escaping content incorrectly and check whitespace, indentation, and context. Use ${ReadFileTool.Name} tool to verify.`,
+          display: diagnosticInfo.display,
+          raw: diagnosticInfo.raw,
           type: ToolErrorType.EDIT_NO_OCCURRENCE_FOUND,
         };
       } else if (!replaceAll && occurrences > 1) {
@@ -531,7 +537,21 @@ Expectation for required parameters:
 3. \`new_string\` MUST be the exact literal text to replace \`old_string\` with (also including all whitespace, indentation, newlines, and surrounding code etc.). Ensure the resulting code is correct and idiomatic.
 4. NEVER escape \`old_string\` or \`new_string\`, that would break the exact literal text requirement.
 **Important:** If ANY of the above are not satisfied, the tool will fail. CRITICAL for \`old_string\`: Must uniquely identify the single instance to change. Include at least 3 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. If this string matches multiple locations, or does not match exactly, the tool will fail.
-**Multiple replacements:** Set \`replace_all\` to true when you want to replace every occurrence that matches \`old_string\`.`,
+**Multiple replacements:** Set \`replace_all\` to true when you want to replace every occurrence that matches \`old_string\`.
+
+Enhanced Features:
+- Automatic detection of line ending mismatches (CRLF vs LF)
+- Smart quote character normalization (curly vs straight quotes)
+- Tab/space indentation matching
+- Typographic character variants (dashes, ellipsis)
+- Detailed diagnostic messages with solution suggestions when edits fail
+
+Best Practices:
+1. Always read the file first using ${ReadFileTool.Name} to get current content
+2. Include 5+ lines of context (before and after) for unique identification
+3. Match the exact indentation style (tabs or spaces) used in the file
+4. Use the same line endings as the file (CRLF for Windows, LF for Unix)
+5. If edit fails, read the diagnostic message for specific issues and solutions`,
       Kind.Edit,
       {
         properties: {
@@ -542,7 +562,7 @@ Expectation for required parameters:
           },
           old_string: {
             description:
-              'The exact literal text to replace, preferably unescaped. For single replacements (default), include at least 3 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. If this string is not the exact literal text (i.e. you escaped it) or does not match exactly, the tool will fail.',
+              'The exact literal text to replace, preferably unescaped. For single replacements (default), include at least 5 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. If this string is not the exact literal text (i.e. you escaped it) or does not match exactly, the tool will fail.',
             type: 'string',
           },
           new_string: {
@@ -639,4 +659,112 @@ Expectation for required parameters:
       }),
     };
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Diagnostic helpers                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Diagnoses why an edit operation failed to find the old_string in the file content.
+ * Provides helpful suggestions for the user to fix the issue.
+ */
+function diagnoseEditFailure(
+  fileContent: string,
+  oldString: string,
+  filePath: string,
+): { display: string; raw: string } {
+  const issues: string[] = [];
+  const suggestions: string[] = [];
+
+  // Check 1: Line ending mismatch (CRLF vs LF)
+  const fileHasCRLF = fileContent.includes('\r\n');
+  const oldStringHasCRLF = oldString.includes('\r\n');
+  const fileHasLF = fileContent.includes('\n') && !fileHasCRLF;
+  const oldStringHasLF = oldString.includes('\n') && !oldStringHasCRLF;
+
+  if ((fileHasCRLF && oldStringHasLF) || (fileHasLF && oldStringHasCRLF)) {
+    issues.push(
+      '行尾符不匹配：文件使用 ' +
+        (fileHasCRLF ? 'CRLF (\\r\\n)' : 'LF (\\n)') +
+        '，但 old_string 使用 ' +
+        (oldStringHasCRLF ? 'CRLF (\\r\\n)' : 'LF (\\n)'),
+    );
+    suggestions.push('统一行尾符格式');
+  }
+
+  // Check 2: Quote character mismatch (smart quotes vs straight quotes)
+  const smartQuotePattern = /[''""]/;
+  const straightQuotePattern = /['"]/;
+  const fileHasSmartQuotes = smartQuotePattern.test(fileContent);
+  const oldStringHasSmartQuotes = smartQuotePattern.test(oldString);
+  const fileHasStraightQuotes = straightQuotePattern.test(fileContent);
+  const oldStringHasStraightQuotes = straightQuotePattern.test(oldString);
+
+  if (
+    (fileHasSmartQuotes &&
+      oldStringHasStraightQuotes &&
+      !oldStringHasSmartQuotes) ||
+    (fileHasStraightQuotes && oldStringHasSmartQuotes && !fileHasSmartQuotes)
+  ) {
+    issues.push(
+      '引号格式不匹配：文件和 old_string 使用了不同类型的引号（智能引号 vs 直引号）',
+    );
+    suggestions.push('检查引号格式，确保一致');
+  }
+
+  // Check 3: Tab vs space indentation
+  const fileHasTabs = /\t/.test(fileContent);
+  const oldStringHasTabs = /\t/.test(oldString);
+  const fileHasSpaces = /^ {2,}/m.test(fileContent);
+  const oldStringHasSpaces = /^ {2,}/m.test(oldString);
+
+  if (
+    (fileHasTabs && oldStringHasSpaces && !oldStringHasTabs) ||
+    (fileHasSpaces && oldStringHasTabs && !fileHasSpaces)
+  ) {
+    issues.push(
+      '缩进格式不匹配：文件使用 ' +
+        (fileHasTabs ? 'Tab' : '空格') +
+        '，但 old_string 使用 ' +
+        (oldStringHasTabs ? 'Tab' : '空格'),
+    );
+    suggestions.push('统一缩进格式（Tab 或空格）');
+  }
+
+  // Check 4: Whitespace differences
+  const trimmedOldString = oldString.trim();
+  if (trimmedOldString !== oldString) {
+    issues.push('old_string 包含前导或尾随空白');
+    suggestions.push('移除多余的前导/尾随空白');
+  }
+
+  // Check 5: Check if old_string is too short (lacks context)
+  if (oldString.split('\n').length <= 2) {
+    suggestions.push('增加更多上下文（建议至少 3 行上下文）');
+  }
+
+  // Build error message
+  let displayMessage = `未找到匹配内容`;
+
+  if (issues.length > 0) {
+    displayMessage += '。检测到以下问题:\n';
+    displayMessage += issues
+      .map((issue, _i) => `  ${_i + 1}. ${issue}`)
+      .join('\n');
+  }
+
+  if (suggestions.length > 0) {
+    displayMessage += '\n\n建议解决方案:\n';
+    displayMessage += suggestions.map((s) => `  • ${s}`).join('\n');
+  }
+
+  displayMessage += `\n\n请使用 ${ReadFileTool.Name} 工具读取文件以查看当前内容。`;
+
+  const rawMessage = `Edit failed: ${issues.join('; ') || 'No specific issue detected'}. old_string not found in ${filePath}`;
+
+  return {
+    display: displayMessage,
+    raw: rawMessage,
+  };
 }
